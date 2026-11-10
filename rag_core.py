@@ -102,6 +102,34 @@ def split_into_chunks(pages, document_name, chunk_size=1000, overlap=200):
     return chunks
 
 
+# NEW: merge "animation builds". When a slide deck is exported to PDF, every click of an
+# animation becomes a new page, and each page contains the lines of the previous one plus
+# a few new ones (not always at the end: a footer can stay at the bottom).
+# If ALL the lines of a chunk also appear in a longer chunk of the same document, we drop it
+# and add its pages to the longer one, which already holds all of its information.
+def merge_contained_chunks(chunks):
+    def lines_of(chunk):
+        return {" ".join(line.split()) for line in chunk["text"].splitlines() if line.strip()}
+
+    by_length = sorted(chunks, key=lambda c: len(c["text"]), reverse=True)
+    kept = []
+    for chunk in by_length:                      # longest first, so "containers" are kept first
+        lines = lines_of(chunk)
+        container = next(
+            (k for k in kept if k["document"] == chunk["document"] and lines <= lines_of(k)),
+            None,
+        )
+        if container is None:
+            kept.append(chunk)
+        else:
+            container["pages"] = sorted(set(container["pages"]) | set(chunk["pages"]))
+
+    kept.sort(key=lambda c: (c["document"], c["pages"][0]))    # back to reading order
+    for i, chunk in enumerate(kept):
+        chunk["chunk_num"] = i
+    return kept
+
+
 def pages_label(chunk):
     """'p. 4', or 'p. 2, 3, 11' for a chunk found on several pages."""
     return "p. " + ", ".join(str(n) for n in chunk["pages"])
@@ -116,7 +144,8 @@ def build_chunks_from_folder(folder):
     for pdf_path in sorted(Path(folder).glob("*.pdf")):
         pages = read_pdf(pdf_path)
         clean, _ = clean_pages(pages)
-        all_chunks.extend(split_into_chunks(clean, document_name=pdf_path.stem))
+        chunks = split_into_chunks(clean, document_name=pdf_path.stem)
+        all_chunks.extend(merge_contained_chunks(chunks))
     return all_chunks
 
 
