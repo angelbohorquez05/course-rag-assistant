@@ -1,0 +1,17 @@
+[
+  {"question": "If I collect more and more data, will I automatically understand my business better?", "answers": [{"document": "lec1_slides", "pages": [7, 8]}], "author": "claude"},
+  {"question": "How can I combine two tables keeping only the rows whose key appears in both?", "answers": [{"document": "lec3_slides", "pages": [11]}], "author": "claude"},
+  {"question": "¿Cómo pongo dos tablas una debajo de la otra sin usar una clave?", "answers": [{"document": "lec3_slides", "pages": [14, 15]}], "author": "claude"},
+  {"question": "What happens when I add a single number to a whole array?", "answers": [{"document": "lec2_slides", "pages": [31, 49, 50]}], "author": "claude"},
+  {"question": "How do I take every third element of an array?", "answers": [{"document": "lec2_slides", "pages": [38, 42]}], "author": "claude"},
+  {"question": "What changes in a histogram if I use more or fewer bins?", "answers": [{"document": "lec4_slides", "pages": [15, 16]}], "author": "claude"},
+  {"question": "Quando si usa la regressione logistica?", "answers": [{"document": "lec5_slides", "pages": [13]}], "author": "claude"},
+  {"question": "Why do we split the data into several parts and repeat the training many times?", "answers": [{"document": "lec5_slides", "pages": [23, 24]}], "author": "claude"},
+  {"question": "Out of all the patients who are really sick, how many does my model catch?", "answers": [{"document": "lec6_slides", "pages": [31, 32, 33]}], "author": "claude"},
+  {"question": "Which error measure is less affected by a few very large mistakes?", "answers": [{"document": "lec6_slides", "pages": [77, 79, 80]}], "author": "claude"},
+  {"question": "How can I turn a column of colours like red, green, blue into numbers without implying an order?", "answers": [{"document": "lec8_slides", "pages": [38, 39, 40, 41, 42, 43]}], "author": "claude"},
+  {"question": "Why can many imperfect models together beat one strong model?", "answers": [{"document": "lec8_slides", "pages": [66, 67, 68, 69, 70]}], "author": "claude"},
+  {"question": "Fortalezas y debilidades de usar pandas?", "answers": [{"document": "lec3_slides", "pages": [6]}], "author": "angel"},
+  {"question": "Que son los bins?", "answers": [{"document": "lec3_slides", "pages": [17]}], "author": "angel"},
+  {"question": "Series vs DataFrame?", "answers": [{"document": "lec3_slides", "pages": [7, 8]}], "author": "angel"}
+]

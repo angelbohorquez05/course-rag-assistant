@@ -21,7 +21,12 @@ from google.genai.types import Content, Part
 load_dotenv()            # reads GEMINI_API_KEY from the .env file
 client = genai.Client()
 
+# Which model turns text into vectors:
+#   "gemini": gemini-embedding-2 (better quality, free tier limited to 1000 texts per day)
+#   "ollama": nomic-embed-text running on this laptop (no limits, works offline)
+EMBEDDING_BACKEND = "ollama"
 EMBEDDING_MODEL = "gemini-embedding-2"
+OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 # First choice, then fallbacks (in class these models were sometimes "under high demand")
 GENERATION_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
 OLLAMA_MODEL = "qwen3.5:0.8b"   # local last resort (see `ollama list` for the models you have)
@@ -71,7 +76,7 @@ def clean_pages(pages, min_share=0.5):
 # ADAPTED from the course (first_rag.ipynb, naive_chunks): same sliding window and same
 # overlap check. NEW: we split page by page, attach a label (document, pages, chunk_num)
 # and skip exact duplicates (e.g. an agenda slide repeated in every section).
-def split_into_chunks(pages, document_name, chunk_size=1000, overlap=200):
+def split_into_chunks(pages, document_name, chunk_size=1000, overlap=200, dedupe=True):
     if not 0 <= overlap < chunk_size:
         raise ValueError("overlap must be >= 0 and smaller than chunk_size")
 
@@ -85,7 +90,7 @@ def split_into_chunks(pages, document_name, chunk_size=1000, overlap=200):
             if len(piece.strip()) < 50:          # skip almost empty leftovers at the end of a page
                 continue
             key = piece.strip()
-            if key in seen:                      # same text already seen: keep one copy, add the page
+            if dedupe and key in seen:           # same text already seen: keep one copy, add the page
                 pages_of_copy = chunks[seen[key]]["pages"]
                 if p["page"] not in pages_of_copy:
                     pages_of_copy.append(p["page"])
@@ -138,14 +143,18 @@ def pages_label(chunk):
 # NEW: the same read -> clean -> split pipeline, repeated for every PDF in a folder.
 # Cleaning is done per document, so each lecture finds its own header
 # (the copyright line is written in slightly different ways in different lectures).
-def build_chunks_from_folder(folder):
+# The three switches let us turn our improvements off, to measure them (see stage3_evaluation).
+def build_chunks_from_folder(folder, clean=True, dedupe=True, merge=True):
     """Read every PDF in `folder` and return all their chunks in one list."""
     all_chunks = []
     for pdf_path in sorted(Path(folder).glob("*.pdf")):
         pages = read_pdf(pdf_path)
-        clean, _ = clean_pages(pages)
-        chunks = split_into_chunks(clean, document_name=pdf_path.stem)
-        all_chunks.extend(merge_contained_chunks(chunks))
+        if clean:
+            pages, _ = clean_pages(pages)
+        chunks = split_into_chunks(pages, document_name=pdf_path.stem, dedupe=dedupe)
+        if merge:
+            chunks = merge_contained_chunks(chunks)
+        all_chunks.extend(chunks)
     return all_chunks
 
 
@@ -154,8 +163,14 @@ def build_chunks_from_folder(folder):
 # ADAPTED from the course (weaviate_tutorial.ipynb, movie embeddings): same batches of 20,
 # same Content/Part objects, same check on the number of embeddings, same wait-and-retry.
 # NEW: a maximum number of retries, and no retry when the error is ours (ValueError).
-def embed_texts(texts, verbose=True):
-    """Return a (n_texts, dim) float32 array with one embedding per text."""
+def embed_texts(texts, verbose=True, kind="document"):
+    """Return a (n_texts, dim) float32 array with one embedding per text.
+
+    kind: "document" for chunks, "query" for questions (only used by the Ollama backend).
+    """
+    if EMBEDDING_BACKEND == "ollama":
+        return embed_texts_ollama(texts, verbose, kind)
+
     all_vectors = []
     for start in range(0, len(texts), BATCH_SIZE):
         batch = texts[start:start + BATCH_SIZE]
@@ -182,9 +197,27 @@ def embed_texts(texts, verbose=True):
     return np.array(all_vectors, dtype=np.float32)
 
 
+# ADAPTED from the course (ollama_api_tutorial.ipynb / litellm_api_tutorial.ipynb used
+# nomic-embed-text with Ollama). NEW: the task prefixes. nomic-embed-text was trained to
+# receive "search_document: " before texts to store and "search_query: " before questions.
+def embed_texts_ollama(texts, verbose=True, kind="document"):
+    import ollama                                # imported here: only needed with this backend
+    prefix = "search_query: " if kind == "query" else "search_document: "
+    all_vectors = []
+    for start in range(0, len(texts), BATCH_SIZE):
+        batch = [prefix + t for t in texts[start:start + BATCH_SIZE]]
+        response = ollama.embed(model=OLLAMA_EMBEDDING_MODEL, input=batch)
+        all_vectors.extend(response.embeddings)
+        if verbose:
+            print(f"Embedded {min(start + BATCH_SIZE, len(texts))}/{len(texts)} (local)")
+    return np.array(all_vectors, dtype=np.float32)
+
+
 # NEW (the course uses np.save/np.load by hand): automatic cache that detects outdated files.
 def load_or_compute_embeddings(chunks, name, folder="data"):
     """Load cached embeddings if they match the current chunks, otherwise compute and save them."""
+    if EMBEDDING_BACKEND != "gemini":
+        name = f"{name}_{EMBEDDING_BACKEND}"      # vectors from different models must never be mixed
     vectors_path = Path(folder) / f"{name}_embeddings.npy"
     chunks_path = Path(folder) / f"{name}_chunks.json"
 
@@ -206,7 +239,7 @@ def load_or_compute_embeddings(chunks, name, folder="data"):
 # SAME formula as the course (image search in class, 23 Sept): cosine similarity + argsort.
 # NEW: optional filter on the lecture, like Quri does when you ask inside a lecture
 # (same idea as the Filter used in weaviate_tutorial.ipynb).
-def search(question, chunks, embeddings, top_k=5, lecture=None):
+def search(question, chunks, embeddings, top_k=5, lecture=None, question_vector=None):
     """Return the top_k chunks most similar to the question, optionally only from one lecture."""
     if lecture is None:
         candidates = np.arange(len(chunks))                     # every chunk
@@ -215,7 +248,8 @@ def search(question, chunks, embeddings, top_k=5, lecture=None):
         if len(candidates) == 0:
             raise ValueError(f"No chunks for lecture {lecture!r}")
 
-    question_vector = embed_texts([question], verbose=False)[0]
+    if question_vector is None:                 # can be passed in to avoid embedding the same question twice
+        question_vector = embed_texts([question], verbose=False, kind="query")[0]
     vectors = embeddings[candidates]
     similarities = (vectors @ question_vector) / (
         np.linalg.norm(vectors, axis=1) * np.linalg.norm(question_vector)
@@ -253,9 +287,10 @@ def generate_with_fallback(prompt, models=GENERATION_MODELS, attempts_per_model=
                 print(f"{model}: {error.code} (attempt {attempt}/{attempts_per_model})")
                 time.sleep(wait_seconds * attempt)   # wait a bit longer each time
             except errors.ClientError as error:
-                if error.code != 404:                # 404 = model name not available for this key
+                # 404 = model not available for this key, 429 = free-tier quota used up for this model
+                if error.code not in (404, 429):
                     raise                            # other 4xx (e.g. wrong key) are our problem: stop
-                print(f"{model}: not available ({error.code}), skipping it")
+                print(f"{model}: {error.code}, skipping it")
                 break
         print(f"{model} unavailable, trying the next model")
 
