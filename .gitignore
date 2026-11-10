@@ -1,4 +1,4 @@
-# Datos privados y claves: NUNCA a GitHub
+# Private data and secrets: NEVER push to GitHub
 .env
 data/
 *.npy
