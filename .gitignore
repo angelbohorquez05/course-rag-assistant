@@ -1,0 +1,7 @@
+# Datos privados y claves: NUNCA a GitHub
+.env
+data/
+*.npy
+.ipynb_checkpoints/
+__pycache__/
+.venv/

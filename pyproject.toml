@@ -1,0 +1,13 @@
+[project]
+name = "course-rag-assistant"
+version = "0.1.0"
+description = "Asistente RAG que responde preguntas sobre el material de un curso"
+requires-python = ">=3.13"
+dependencies = [
+    "google-genai>=2.22.0",
+    "python-dotenv>=1.0.0",
+    "pypdf>=6.0.0",
+    "numpy>=2.0.0",
+    "tqdm>=4.70.0",
+    "ipykernel>=6.29.0",
+]
