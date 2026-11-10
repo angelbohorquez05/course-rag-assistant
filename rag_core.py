@@ -1,0 +1,254 @@
+"""Reusable building blocks of the course RAG assistant.
+
+Every function was first written and explained step by step in stage1_minimal_rag.ipynb.
+Comments say where each piece comes from:
+    SAME     identical to the course code
+    ADAPTED  based on the course code, with changes explained in the comment
+    NEW      written for this project
+"""
+import json
+import time
+from collections import Counter
+from pathlib import Path
+
+import numpy as np
+import pypdf
+from dotenv import load_dotenv
+from google import genai
+from google.genai import errors
+from google.genai.types import Content, Part
+
+load_dotenv()            # reads GEMINI_API_KEY from the .env file
+client = genai.Client()
+
+EMBEDDING_MODEL = "gemini-embedding-2"
+# First choice, then fallbacks (in class these models were sometimes "under high demand")
+GENERATION_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
+OLLAMA_MODEL = "qwen3.5:0.8b"   # local last resort (see `ollama list` for the models you have)
+
+BATCH_SIZE = 20
+RETRY_DELAY_SECONDS = 30
+MAX_RETRIES = 5
+
+
+# ---------------------------------------------------------------- reading and cleaning
+
+# ADAPTED from the course (first_rag.ipynb, read_pdf): same pypdf reading,
+# but we keep each page separately instead of joining all the text.
+def read_pdf(path):
+    """Return a list of dicts, one per page, with its page number and text."""
+    reader = pypdf.PdfReader(path)
+    pages = []
+    for page_number, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        pages.append({"page": page_number, "text": text})
+    return pages
+
+
+# NEW (not in the course): automatic removal of headers/footers.
+def clean_pages(pages, min_share=0.5):
+    """Remove lines repeated on many pages (headers/footers) and lines that are only a page number."""
+    line_counts = Counter()
+    for p in pages:
+        unique_lines = {line.strip() for line in p["text"].splitlines() if line.strip()}
+        line_counts.update(unique_lines)
+
+    threshold = max(2, int(len(pages) * min_share))
+    repeated = {line for line, count in line_counts.items() if count >= threshold}
+
+    cleaned = []
+    for p in pages:
+        kept = [
+            line for line in p["text"].splitlines()
+            if line.strip() and line.strip() not in repeated and not line.strip().isdigit()
+        ]
+        cleaned.append({"page": p["page"], "text": "\n".join(kept)})
+    return cleaned, repeated
+
+
+# ---------------------------------------------------------------- chunking
+
+# ADAPTED from the course (first_rag.ipynb, naive_chunks): same sliding window and same
+# overlap check. NEW: we split page by page, attach a label (document, pages, chunk_num)
+# and skip exact duplicates (e.g. an agenda slide repeated in every section).
+def split_into_chunks(pages, document_name, chunk_size=1000, overlap=200):
+    if not 0 <= overlap < chunk_size:
+        raise ValueError("overlap must be >= 0 and smaller than chunk_size")
+
+    step = chunk_size - overlap
+    chunks = []
+    seen = {}                                    # chunk text -> its position in `chunks`
+    for p in pages:
+        text = p["text"]
+        for start in range(0, len(text), step):
+            piece = text[start:start + chunk_size]
+            if len(piece.strip()) < 50:          # skip almost empty leftovers at the end of a page
+                continue
+            key = piece.strip()
+            if key in seen:                      # same text already seen: keep one copy, add the page
+                pages_of_copy = chunks[seen[key]]["pages"]
+                if p["page"] not in pages_of_copy:
+                    pages_of_copy.append(p["page"])
+            else:
+                seen[key] = len(chunks)
+                chunks.append({
+                    "document": document_name,
+                    "pages": [p["page"]],
+                    "chunk_num": len(chunks),
+                    "text": piece,
+                })
+            if start + chunk_size >= len(text):  # reached the end of the page
+                break
+    return chunks
+
+
+def pages_label(chunk):
+    """'p. 4', or 'p. 2, 3, 11' for a chunk found on several pages."""
+    return "p. " + ", ".join(str(n) for n in chunk["pages"])
+
+
+# NEW: the same read -> clean -> split pipeline, repeated for every PDF in a folder.
+# Cleaning is done per document, so each lecture finds its own header
+# (the copyright line is written in slightly different ways in different lectures).
+def build_chunks_from_folder(folder):
+    """Read every PDF in `folder` and return all their chunks in one list."""
+    all_chunks = []
+    for pdf_path in sorted(Path(folder).glob("*.pdf")):
+        pages = read_pdf(pdf_path)
+        clean, _ = clean_pages(pages)
+        all_chunks.extend(split_into_chunks(clean, document_name=pdf_path.stem))
+    return all_chunks
+
+
+# ---------------------------------------------------------------- embeddings
+
+# ADAPTED from the course (weaviate_tutorial.ipynb, movie embeddings): same batches of 20,
+# same Content/Part objects, same check on the number of embeddings, same wait-and-retry.
+# NEW: a maximum number of retries, and no retry when the error is ours (ValueError).
+def embed_texts(texts, verbose=True):
+    """Return a (n_texts, dim) float32 array with one embedding per text."""
+    all_vectors = []
+    for start in range(0, len(texts), BATCH_SIZE):
+        batch = texts[start:start + BATCH_SIZE]
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                # One Content per text: if we pass a plain list of strings, Gemini treats it
+                # as ONE content made of many parts and returns a single embedding.
+                contents = [Content(parts=[Part.from_text(text=t)]) for t in batch]
+                response = client.models.embed_content(model=EMBEDDING_MODEL, contents=contents)
+                vectors = [e.values for e in response.embeddings]
+                if len(vectors) != len(batch):
+                    raise ValueError(f"Expected {len(batch)} embeddings, got {len(vectors)}")
+                all_vectors.extend(vectors)
+                break
+            except ValueError:
+                raise                      # our own check failed: retrying would give the same result
+            except Exception as error:
+                if attempt == MAX_RETRIES:
+                    raise
+                print(f"Batch {start}: {error}. Retry {attempt}/{MAX_RETRIES} in {RETRY_DELAY_SECONDS}s")
+                time.sleep(RETRY_DELAY_SECONDS)
+        if verbose:
+            print(f"Embedded {min(start + BATCH_SIZE, len(texts))}/{len(texts)}")
+    return np.array(all_vectors, dtype=np.float32)
+
+
+# NEW (the course uses np.save/np.load by hand): automatic cache that detects outdated files.
+def load_or_compute_embeddings(chunks, name, folder="data"):
+    """Load cached embeddings if they match the current chunks, otherwise compute and save them."""
+    vectors_path = Path(folder) / f"{name}_embeddings.npy"
+    chunks_path = Path(folder) / f"{name}_chunks.json"
+
+    if vectors_path.exists() and chunks_path.exists():
+        cached_chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
+        if cached_chunks == chunks:
+            print("Loaded embeddings from cache")
+            return np.load(vectors_path)
+        print("Chunks changed: recomputing embeddings")
+
+    vectors = embed_texts([c["text"] for c in chunks])
+    np.save(vectors_path, vectors)
+    chunks_path.write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
+    return vectors
+
+
+# ---------------------------------------------------------------- retrieval
+
+# SAME formula as the course (image search in class, 23 Sept): cosine similarity + argsort.
+# NEW: optional filter on the lecture, like Quri does when you ask inside a lecture
+# (same idea as the Filter used in weaviate_tutorial.ipynb).
+def search(question, chunks, embeddings, top_k=5, lecture=None):
+    """Return the top_k chunks most similar to the question, optionally only from one lecture."""
+    if lecture is None:
+        candidates = np.arange(len(chunks))                     # every chunk
+    else:
+        candidates = np.array([i for i, c in enumerate(chunks) if c["document"] == lecture])
+        if len(candidates) == 0:
+            raise ValueError(f"No chunks for lecture {lecture!r}")
+
+    question_vector = embed_texts([question], verbose=False)[0]
+    vectors = embeddings[candidates]
+    similarities = (vectors @ question_vector) / (
+        np.linalg.norm(vectors, axis=1) * np.linalg.norm(question_vector)
+    )
+    best = np.argsort(-similarities)[:top_k]       # positions sorted from most to least similar
+    return [(float(similarities[i]), chunks[candidates[i]]) for i in best]
+
+
+# ---------------------------------------------------------------- generation
+
+# ADAPTED from the course (first_rag.ipynb, TEMPLATE_PROMPT): same rules (only the sources,
+# say when the answer is missing, cite the source). NEW: cite the page, answer in the question's language.
+PROMPT_TEMPLATE = """You are a teaching assistant for a course.
+Answer the question using ONLY the information in the sources below.
+If the sources do not contain the answer, say clearly that the course materials do not cover it.
+After each statement, cite its source in the form [document, p. N].
+Answer in the same language as the question.
+
+SOURCES:
+{sources}
+
+QUESTION: {question}
+"""
+
+
+# NEW: fallback between models (same idea as the LiteLLM Router seen in class).
+def generate_with_fallback(prompt, models=GENERATION_MODELS, attempts_per_model=3, wait_seconds=10):
+    """Try each model in order; on a server error (5xx, e.g. 'high demand') wait and retry."""
+    for model in models:
+        for attempt in range(1, attempts_per_model + 1):
+            try:
+                response = client.models.generate_content(model=model, contents=prompt)
+                return response.text, model
+            except errors.ServerError as error:
+                print(f"{model}: {error.code} (attempt {attempt}/{attempts_per_model})")
+                time.sleep(wait_seconds * attempt)   # wait a bit longer each time
+            except errors.ClientError as error:
+                if error.code != 404:                # 404 = model name not available for this key
+                    raise                            # other 4xx (e.g. wrong key) are our problem: stop
+                print(f"{model}: not available ({error.code}), skipping it")
+                break
+        print(f"{model} unavailable, trying the next model")
+
+    # Last resort: a local model with Ollama (same call as the course's ollama_api_tutorial.ipynb).
+    print(f"All Gemini models busy: answering locally with Ollama ({OLLAMA_MODEL})")
+    import ollama                                    # imported here: only needed when Gemini fails
+    response = ollama.chat(
+        model=OLLAMA_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        think=False,
+    )
+    return response.message.content, f"ollama/{OLLAMA_MODEL}"
+
+
+# ADAPTED from the course (first_rag.ipynb, answer): same structure.
+# NEW: numpy search instead of Weaviate, optional lecture filter, model fallback.
+def answer(question, chunks, embeddings, top_k=5, lecture=None):
+    results = search(question, chunks, embeddings, top_k, lecture)
+    sources = "\n\n".join(
+        f"[{chunk['document']}, {pages_label(chunk)}]\n{chunk['text']}" for _, chunk in results
+    )
+    prompt = PROMPT_TEMPLATE.format(sources=sources, question=question)
+    text, model_used = generate_with_fallback(prompt)
+    print(f"(answered by {model_used})")
+    return text, results
