@@ -272,7 +272,8 @@ def search(question, chunks, embeddings, top_k=5, lecture=None, question_vector=
 # say when the answer is missing, cite the source). NEW: cite the page, answer in the question's language.
 PROMPT_TEMPLATE = """You are a teaching assistant for a course.
 Answer the question using ONLY the information in the sources below.
-If the sources do not contain the answer, say clearly that the course materials do not cover it.
+If the sources do not contain the answer, do not invent anything: reply ONLY with the code
+NOT_FOUND_IT (question in Italian), NOT_FOUND_ES (Spanish) or NOT_FOUND_EN (English).
 After each statement, cite its source in the form [document, p. N].
 Answer in the same language as the question.
 
@@ -315,6 +316,26 @@ def generate_with_fallback(prompt, models=GENERATION_MODELS, attempts_per_model=
 
 # ADAPTED from the course (first_rag.ipynb, answer): same structure.
 # NEW: numpy search instead of Weaviate, optional lecture filter, model fallback.
+# NEW: fixed, a bit dramatic, messages for when the slides do not contain the answer.
+# The model only chooses the language; the text is always exactly this.
+NOT_FOUND_MESSAGES = {
+    "NOT_FOUND_IT": "Ho cercato in ogni slide, pagina dopo pagina, lezione dopo lezione. Ci ho messo l'anima. "
+                    "Ma su questo, il corso tace.\n\nQuesto argomento non è nei materiali del corso.",
+    "NOT_FOUND_ES": "Busqué en cada slide, página tras página, lección tras lección. Le puse el alma. "
+                    "Pero sobre esto, el curso guarda silencio.\n\nEste tema no está en los materiales del curso.",
+    "NOT_FOUND_EN": "I searched every slide, page after page, lesson after lesson. I put my soul into it. "
+                    "But on this, the course is silent.\n\nThis topic is not in the course materials.",
+}
+
+
+def finalize_answer(text):
+    """Replace a NOT_FOUND code with its fixed message; leave normal answers unchanged."""
+    for code, message in NOT_FOUND_MESSAGES.items():
+        if code in text:
+            return message
+    return text
+
+
 def build_prompt(question, results):
     """Put the retrieved chunks, labelled with document and pages, into the prompt."""
     sources = "\n\n".join(
@@ -327,5 +348,6 @@ def answer(question, chunks, embeddings, top_k=5, lecture=None):
     results = search(question, chunks, embeddings, top_k, lecture)
     prompt = build_prompt(question, results)
     text, model_used = generate_with_fallback(prompt)
+    text = finalize_answer(text)
     print(f"(answered by {model_used})")
     return text, results

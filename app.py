@@ -3,6 +3,8 @@
 Run it from the project folder with:
     uv run streamlit run app.py
 """
+import json
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -12,6 +14,7 @@ from diagrams import find_diagram
 from rag_core import (
     build_chunks_from_folder,
     build_prompt,
+    finalize_answer,
     generate_with_fallback,
     load_or_compute_embeddings,
     pages_label,
@@ -76,6 +79,59 @@ def slide_image(document, page):
     image = pdf[page - 1].render(scale=1.6).to_pil()
     pdf.close()
     return image
+
+
+FEEDBACK_FILE = Path("data") / "feedback.jsonl"     # inside data/, so it stays private (not on GitHub)
+
+
+def save_feedback(index):
+    """Called when 👍/👎 is clicked: append the rating, the question and the sources to a file."""
+    rating = st.session_state.get(f"feedback_{index}")
+    if rating is None:
+        return
+    answer = st.session_state.messages[index]
+    question = st.session_state.messages[index - 1]["content"]
+    record = {
+        "time": datetime.now().isoformat(timespec="seconds"),
+        "rating": "up" if rating == 1 else "down",
+        "question": question,
+        "model": answer["model"],
+        "sources": [{"document": c["document"], "pages": c["pages"]} for _, c in answer["sources"]],
+    }
+    with FEEDBACK_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def copy_button(text, key):
+    """A small 'Copy' button: copies the answer to the clipboard (runs in the browser)."""
+    # json.dumps + escaping "<" keeps the model's text inside the JavaScript string, so it can
+    # never be interpreted as HTML or script.
+    payload = json.dumps(text).replace("<", "\\u003c")
+    st.iframe(
+        f"""<button id="b" style="background:none;border:1px solid #3a3a3a;border-radius:8px;color:#9a9a9a;
+        font:13px sans-serif;padding:4px 12px;cursor:pointer">Copy</button>
+        <script>
+        const b = document.getElementById("b");
+        const text = {payload};
+        function done() {{ b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1500); }}
+        function fallback() {{
+            const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t);
+            t.select(); document.execCommand("copy"); t.remove(); done();
+        }}
+        b.onclick = () => navigator.clipboard ? navigator.clipboard.writeText(text).then(done, fallback) : fallback();
+        </script>""",
+        height=40,
+    )
+
+
+def answer_actions(index, text, model):
+    """Under each answer, like Quri: thumbs up/down, copy, and which model answered."""
+    left, middle, right = st.columns([1.2, 1, 5], vertical_alignment="center")
+    with left:
+        st.feedback("thumbs", key=f"feedback_{index}", on_change=save_feedback, args=(index,))
+    with middle:
+        copy_button(text, key=index)
+    right.caption(f"Answered by {model}")
 
 
 def show_best_slide(results):
@@ -145,7 +201,7 @@ if not st.session_state.messages:
 else:
     st.caption(heading)
 
-for message in st.session_state.messages:
+for index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         if message["role"] == "assistant":
             with st.expander("✓ Searched the slides", expanded=False):
@@ -156,7 +212,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
         if message["role"] == "assistant":
             show_best_slide(message["sources"])
-            st.caption(f"Answered by {message['model']}")
+            answer_actions(index, message["content"], message["model"])
 
 question = st.chat_input(placeholder)
 
@@ -173,11 +229,11 @@ if question:
                             f"similarity {score:.3f}")
             status.update(label="Writing the answer...")
             text, model_used = generate_with_fallback(build_prompt(question, results))
+            text = finalize_answer(text)
             status.update(label="✓ Searched the slides", state="complete")
         st.markdown(text)
         show_best_slide(results)
-        st.caption(f"Answered by {model_used}")
-
-    st.session_state.messages.append(
-        {"role": "assistant", "content": text, "sources": results, "model": model_used}
-    )
+        st.session_state.messages.append(
+            {"role": "assistant", "content": text, "sources": results, "model": model_used}
+        )
+        answer_actions(len(st.session_state.messages) - 1, text, model_used)

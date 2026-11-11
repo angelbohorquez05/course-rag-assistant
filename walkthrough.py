@@ -63,7 +63,7 @@ def map_2d(_embeddings):
 # a small uppercase label, a title, the pipeline strip with the current step lit up,
 # then one idea, one visual, and the key code.
 
-ACCENT = "#5DCAA5"
+ACCENT = "#4A90E2"
 MUTED = "#6f6f6f"
 TEXT = "#e8e8e8"
 LINE = "#3a3a3a"
