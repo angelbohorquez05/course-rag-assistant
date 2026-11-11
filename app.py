@@ -15,6 +15,7 @@ from rag_core import (
     build_chunks_from_folder,
     build_prompt,
     finalize_answer,
+    NOT_FOUND_MESSAGES,
     generate_with_fallback,
     load_or_compute_embeddings,
     pages_label,
@@ -48,6 +49,13 @@ st.markdown(
     .welcome .kicker { color: #9a9a9a; font-size: 0.85rem; margin-bottom: 0.2rem; }
     .welcome h1 { font-size: 1.9rem; font-weight: 600; margin-top: 0; }
     section[data-testid="stSidebar"] button { justify-content: flex-start; text-align: left; }
+    /* Chat without avatars: the question is a bubble on the right, the answer is full width. */
+    [data-testid^="stChatMessageAvatar"] { display: none; }
+    [data-testid="stChatMessage"] { background: transparent; padding-left: 0; padding-right: 0; }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) { justify-content: flex-end; }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+        flex: 0 1 auto; max-width: 75%; background: #17181c; border-radius: 18px; padding: 0.55rem 1rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -80,6 +88,8 @@ def slide_image(document, page):
     pdf.close()
     return image
 
+
+# Our own chat icons instead of Streamlit's default ones (Material Symbols, no emoji).
 
 FEEDBACK_FILE = Path("data") / "feedback.jsonl"     # inside data/, so it stays private (not on GitHub)
 
@@ -203,7 +213,7 @@ else:
 
 for index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        if message["role"] == "assistant":
+        if message["role"] == "assistant" and message["sources"]:
             with st.expander("✓ Searched the slides", expanded=False):
                 for score, chunk in message["sources"]:
                     st.markdown(f"**{title_of(chunk['document'])}** · {pages_label(chunk)} · "
@@ -211,7 +221,8 @@ for index, message in enumerate(st.session_state.messages):
                     st.text(chunk["text"])
         st.markdown(message["content"])
         if message["role"] == "assistant":
-            show_best_slide(message["sources"])
+            if message["sources"]:
+                show_best_slide(message["sources"])
             answer_actions(index, message["content"], message["model"])
 
 question = st.chat_input(placeholder)
@@ -230,9 +241,15 @@ if question:
             status.update(label="Writing the answer...")
             text, model_used = generate_with_fallback(build_prompt(question, results))
             text = finalize_answer(text)
-            status.update(label="✓ Searched the slides", state="complete")
+            # When the course has no answer, show only the message: no sources, no slide.
+            if text in NOT_FOUND_MESSAGES.values():
+                results = []
+                status.update(label="Searched the slides", state="complete")
+            else:
+                status.update(label="✓ Searched the slides", state="complete")
         st.markdown(text)
-        show_best_slide(results)
+        if results:
+            show_best_slide(results)
         st.session_state.messages.append(
             {"role": "assistant", "content": text, "sources": results, "model": model_used}
         )
