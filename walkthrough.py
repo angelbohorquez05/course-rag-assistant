@@ -210,7 +210,7 @@ def slide_cleaning(stats):
         page.append(f"<text x='{x + 144}' y='122' fill='#E24B4A' font-size='10' text-anchor='end' "
                     f"font-family='sans-serif' text-decoration='line-through'>{k + 1}</text>")
     illustration("".join(page), height=140)
-    st.caption("In rosso: il copyright e il numero di pagina, presenti su ogni slide. In verde: il contenuto che resta. "
+    st.caption("In rosso: il copyright e il numero di pagina, presenti su ogni slide. In blu: il contenuto che resta. "
                "La regola funziona con qualsiasi documento, senza scrivere a mano cosa togliere.")
     before = int(df["caratteri prima della pulizia"].sum())
     after = int(df["caratteri dopo la pulizia"].sum())
@@ -329,7 +329,7 @@ def slide_prompt():
     if results is None:
         st.warning("Prima fai una ricerca nel passo precedente.")
         return
-    st.caption("Regole: rispondere solo con le fonti, citare lezione e pagina, dire quando la risposta non c'è, "
+    st.caption("Regole: usare solo le slide, testo facile da leggere, fonti (lezione e pagina) solo alla fine, dire quando la risposta non c'è, "
                "rispondere nella lingua della domanda.")
     st.code(build_prompt(question, results), language=None, wrap_lines=True, height=400)
 
@@ -348,19 +348,21 @@ def slide_evaluation():
 
 def slide_future():
     header("Prossimi passi", "Dove può arrivare")
-    items = [("Memoria", "Ricordare la conversazione, per fare domande di seguito."),
-             ("Tool calling", "L'LLM riscrive la domanda prima di cercare: "
-                              "\"e la regolarizzazione?\" diventa \"regolarizzazione contro l'overfitting\"."),
-             ("Multilingue", "Embedding che capiscono bene anche spagnolo e italiano."),
-             ("Schemi ricreati", "Un modello multimodale ridisegna gli schemi delle slide, invece di mostrarne la foto."),
-             ("Weaviate", "Un database vettoriale per cercare veloce tra migliaia di documenti, con filtri.")]
-    for row in (items[:3], items[3:]):
-        cols = st.columns(3, gap="medium")
-        for col, (title, text) in zip(cols, row):
-            col.markdown(f"<div class='card'><h4 style='color:{ACCENT}'>{title}</h4><p>{text}</p></div>",
-                         unsafe_allow_html=True)
-        html("<div style='height:0.9rem'></div>")
-    html(f"<div class='lead' style='text-align:center;margin-top:1rem'>Funziona con qualsiasi corso: "
+    items = [("Memoria", "Ricorda la conversazione, per fare domande di seguito."),
+             ("Tool calling", "L'LLM riscrive la domanda prima di cercare."),
+             ("Multilingue", "Embedding forti anche in spagnolo e italiano."),
+             ("Schemi ricreati", "Ogni schema delle slide ridisegnato in automatico."),
+             ("Weaviate", "Database vettoriale per migliaia di documenti.")]
+    rows = "".join(
+        f"<div style='display:grid;grid-template-columns:3.2rem 13rem 1fr;align-items:baseline;"
+        f"padding:1.05rem 0;border-bottom:1px solid {LINE}'>"
+        f"<span style='color:{ACCENT};font-size:0.85rem;letter-spacing:0.1em'>{i:02d}</span>"
+        f"<span style='font-size:1.15rem;font-weight:600'>{title}</span>"
+        f"<span style='color:#b5b5b5;font-size:1.05rem'>{text}</span></div>"
+        for i, (title, text) in enumerate(items, start=1)
+    )
+    html(f"<div style='max-width:820px;margin:0.6rem auto 0;border-top:1px solid {LINE}'>{rows}</div>")
+    html(f"<div class='lead' style='text-align:center;margin-top:2rem'>Funziona con qualsiasi corso: "
          f"<b>basta una cartella di PDF</b>.</div>")
 
 

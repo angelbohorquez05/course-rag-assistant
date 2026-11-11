@@ -3,6 +3,7 @@
 Run it from the project folder with:
     uv run streamlit run app.py
 """
+import html
 import json
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from rag_core import (
     build_chunks_from_folder,
     build_prompt,
     finalize_answer,
+    split_references,
     NOT_FOUND_MESSAGES,
     generate_with_fallback,
     load_or_compute_embeddings,
@@ -49,6 +51,12 @@ st.markdown(
     .welcome .kicker { color: #9a9a9a; font-size: 0.85rem; margin-bottom: 0.2rem; }
     .welcome h1 { font-size: 1.9rem; font-weight: 600; margin-top: 0; }
     section[data-testid="stSidebar"] button { justify-content: flex-start; text-align: left; }
+    /* Answers: a bit more air between lines, like Quri. */
+    [data-testid="stChatMessageContent"] p, [data-testid="stChatMessageContent"] li { line-height: 1.75; }
+    [data-testid="stChatMessageContent"] li { margin-bottom: 0.25rem; }
+    .references { border-top: 1px solid #2a2b30; margin-top: 0.8rem; padding-top: 0.6rem;
+                  color: #8a8a8a; font-size: 0.82rem; line-height: 1.6; }
+    .references .label { text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.7rem; margin-bottom: 0.2rem; }
     /* Chat without avatars: the question is a bubble on the right, the answer is full width. */
     [data-testid^="stChatMessageAvatar"] { display: none; }
     [data-testid="stChatMessage"] { background: transparent; padding-left: 0; padding-right: 0; }
@@ -118,7 +126,8 @@ def copy_button(text, key):
     # never be interpreted as HTML or script.
     payload = json.dumps(text).replace("<", "\\u003c")
     st.iframe(
-        f"""<button id="b" style="background:none;border:1px solid #3a3a3a;border-radius:8px;color:#9a9a9a;
+        f"""<style>html, body {{ margin: 0; padding: 2px; overflow: hidden; }}</style>
+        <button id="b" style="background:none;border:1px solid #3a3a3a;border-radius:8px;color:#9a9a9a;
         font:13px sans-serif;padding:4px 12px;cursor:pointer">Copy</button>
         <script>
         const b = document.getElementById("b");
@@ -130,7 +139,7 @@ def copy_button(text, key):
         }}
         b.onclick = () => navigator.clipboard ? navigator.clipboard.writeText(text).then(done, fallback) : fallback();
         </script>""",
-        height=40,
+        height=44,
     )
 
 
@@ -142,6 +151,19 @@ def answer_actions(index, text, model):
     with middle:
         copy_button(text, key=index)
     right.caption(f"Answered by {model}")
+
+
+def show_references(references, results):
+    """At the very end of the answer: where the information comes from, separate from the text."""
+    if not references:   # the model forgot the line: use the retrieved chunks instead
+        references = list(dict.fromkeys(f"{c['document']}, {pages_label(c)}" for _, c in results[:3]))
+    items = []
+    for reference in references:
+        document, _, pages = reference.partition(",")
+        label = f"{title_of(document.strip())} · {pages.strip()}" if pages else title_of(document.strip())
+        items.append(f"<div>{html.escape(label)}</div>")
+    st.markdown(f'<div class="references"><div class="label">Sources</div>{"".join(items)}</div>',
+                unsafe_allow_html=True)
 
 
 def show_best_slide(results):
@@ -214,7 +236,7 @@ else:
 for index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         if message["role"] == "assistant" and message["sources"]:
-            with st.expander("✓ Searched the slides", expanded=False):
+            with st.expander("Searched the slides", expanded=False):
                 for score, chunk in message["sources"]:
                     st.markdown(f"**{title_of(chunk['document'])}** · {pages_label(chunk)} · "
                                 f"similarity {score:.3f}")
@@ -223,6 +245,7 @@ for index, message in enumerate(st.session_state.messages):
         if message["role"] == "assistant":
             if message["sources"]:
                 show_best_slide(message["sources"])
+                show_references(message.get("references", []), message["sources"])
             answer_actions(index, message["content"], message["model"])
 
 question = st.chat_input(placeholder)
@@ -241,16 +264,19 @@ if question:
             status.update(label="Writing the answer...")
             text, model_used = generate_with_fallback(build_prompt(question, results))
             text = finalize_answer(text)
+            text, references = split_references(text)
             # When the course has no answer, show only the message: no sources, no slide.
             if text in NOT_FOUND_MESSAGES.values():
                 results = []
                 status.update(label="Searched the slides", state="complete")
             else:
-                status.update(label="✓ Searched the slides", state="complete")
+                status.update(label="Searched the slides", state="complete")
         st.markdown(text)
         if results:
             show_best_slide(results)
+            show_references(references, results)
         st.session_state.messages.append(
-            {"role": "assistant", "content": text, "sources": results, "model": model_used}
+            {"role": "assistant", "content": text, "sources": results, "model": model_used,
+             "references": references}
         )
         answer_actions(len(st.session_state.messages) - 1, text, model_used)

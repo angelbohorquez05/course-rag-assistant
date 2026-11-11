@@ -271,17 +271,42 @@ def search(question, chunks, embeddings, top_k=5, lecture=None, question_vector=
 # ADAPTED from the course (first_rag.ipynb, TEMPLATE_PROMPT): same rules (only the sources,
 # say when the answer is missing, cite the source). NEW: cite the page, answer in the question's language.
 PROMPT_TEMPLATE = """You are a teaching assistant for a course.
-Answer the question using ONLY the information in the sources below.
-If the sources do not contain the answer, do not invent anything: reply ONLY with the code
+Answer the question using ONLY the information in the course material below.
+If the material does not contain the answer, do not invent anything: reply ONLY with the code
 NOT_FOUND_IT (question in Italian), NOT_FOUND_ES (Spanish) or NOT_FOUND_EN (English).
-After each statement, cite its source in the form [document, p. N].
 Answer in the same language as the question.
 
-SOURCES:
+Write the answer so it is easy to read:
+- Start with one or two sentences that answer the question directly.
+- Put the key terms in **bold**.
+- When there are steps, parts or a comparison, use a short numbered or bulleted list.
+- Keep paragraphs short. No headings, no openings like "According to the sources".
+- Do NOT put citations inside the text.
+- On the very last line, list the material you used, exactly in this form:
+REFERENCES: lec3_slides, p. 6; lec3_slides, p. 7
+
+COURSE MATERIAL:
 {sources}
 
 QUESTION: {question}
 """
+
+
+# NEW: the references go at the end, separate from the answer, so the text stays easy to read.
+def split_references(text):
+    """Split the final 'REFERENCES: doc, p. N; ...' line from the answer. Returns (answer, references)."""
+    lines = text.rstrip().splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i].strip().strip("*").strip()
+        if line.upper().startswith("REFERENCES"):
+            listed = line.split(":", 1)[1] if ":" in line else ""
+            references = []
+            for item in listed.replace("*", "").split(";"):
+                item = item.strip()
+                if item and item not in references:
+                    references.append(item)
+            return "\n".join(lines[:i]).rstrip(), references
+    return text, []
 
 
 # NEW: fallback between models (same idea as the LiteLLM Router seen in class).
