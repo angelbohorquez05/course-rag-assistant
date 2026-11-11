@@ -41,7 +41,7 @@ LECTURE_TITLES = {
     "lec8_slides": "08 Feature Engineering",
 }
 
-st.set_page_config(page_title="Course Assistant", layout="centered")
+st.set_page_config(page_title="Lumi", layout="centered")
 
 # A few style touches: centered welcome title, left-aligned sidebar buttons.
 st.markdown(
@@ -199,7 +199,15 @@ def open_scope(lecture):
 
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
-    st.markdown("### Course Assistant")
+    st.markdown(
+        "<div style='display:flex;align-items:center;gap:0.55rem;margin:0.2rem 0 0.1rem'>"
+        "<span style='width:11px;height:11px;border-radius:50%;background:#4A90E2'></span>"
+        "<span style='font-size:1.7rem;font-weight:700;letter-spacing:0.03em;"
+        "background:linear-gradient(120deg,#ffffff 20%,#4A90E2 90%);-webkit-background-clip:text;"
+        "background-clip:text;color:transparent'>Lumi</span></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Ask the slides for clarification")
     mode = st.radio("Mode", ["Assistant", "How it works"], horizontal=True, label_visibility="collapsed")
     if mode == "Assistant":                 # the course list is only useful in the chat
         st.button("New chat", width="stretch", on_click=open_scope,

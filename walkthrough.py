@@ -144,7 +144,11 @@ def slide_title(course_name, author):
     html(f"<div style='text-align:center;margin-top:9vh'>"
          f"<svg viewBox='0 0 680 140' width='70%'>{stack}{lines}{bubble}</svg>"
          f"<div class='kicker' style='margin-top:1.4rem'>Machine Learning Advanced · Progetto finale</div>"
-         f"<div class='slide-title' style='font-size:2.8rem'>Assistente RAG per lo studio</div>"
+         f"<div style='position:relative;display:inline-block;margin-top:0.4rem'>"
+         f"<div style='position:relative;font-size:5.4rem;font-weight:700;letter-spacing:0.04em;line-height:1.1;"
+         f"background:linear-gradient(120deg,#ffffff 15%,{ACCENT} 85%);-webkit-background-clip:text;background-clip:text;"
+         f"color:transparent'>Lumi</div></div>"
+         f"<div style='color:{MUTED};font-size:1.15rem;margin:-0.3rem 0 0.8rem'>Assistente RAG per lo studio</div>"
          f"<div class='lead'>Studia con l'AI, <b>senza uscire dal tema</b>.</div>"
          f"<div style='color:{MUTED};margin-top:2rem'>{author}</div></div>")
 
