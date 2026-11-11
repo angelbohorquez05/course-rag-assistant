@@ -28,7 +28,15 @@ EMBEDDING_BACKEND = "ollama"
 EMBEDDING_MODEL = "gemini-embedding-2"
 OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 # First choice, then fallbacks (in class these models were sometimes "under high demand")
-GENERATION_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
+# Free-tier requests per day (from AI Studio): 3.6/3.8 Flash 20 each, 3.5/3.1 Flash Lite 500 each,
+# Gemma 4 31B 14,400. Best quality first, then the models with more daily quota.
+GENERATION_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemma-4-31b-it",
+]
 OLLAMA_MODEL = "qwen3.5:0.8b"   # local last resort (see `ollama list` for the models you have)
 
 BATCH_SIZE = 20
@@ -307,12 +315,17 @@ def generate_with_fallback(prompt, models=GENERATION_MODELS, attempts_per_model=
 
 # ADAPTED from the course (first_rag.ipynb, answer): same structure.
 # NEW: numpy search instead of Weaviate, optional lecture filter, model fallback.
-def answer(question, chunks, embeddings, top_k=5, lecture=None):
-    results = search(question, chunks, embeddings, top_k, lecture)
+def build_prompt(question, results):
+    """Put the retrieved chunks, labelled with document and pages, into the prompt."""
     sources = "\n\n".join(
         f"[{chunk['document']}, {pages_label(chunk)}]\n{chunk['text']}" for _, chunk in results
     )
-    prompt = PROMPT_TEMPLATE.format(sources=sources, question=question)
+    return PROMPT_TEMPLATE.format(sources=sources, question=question)
+
+
+def answer(question, chunks, embeddings, top_k=5, lecture=None):
+    results = search(question, chunks, embeddings, top_k, lecture)
+    prompt = build_prompt(question, results)
     text, model_used = generate_with_fallback(prompt)
     print(f"(answered by {model_used})")
     return text, results
